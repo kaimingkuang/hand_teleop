@@ -274,6 +274,7 @@ def concate_features(features, stack_robot_qpos, stack_frames = True):
 
   return concatenated_obs, concatenated_robot_qpos
 
+@torch.no_grad()
 def generate_features(visual_baked, model, preprocess, backbone_type="ResNet34", stack_frames=False, encode=False, num_data_aug=5, augmenter = T.AugMix()):
   
   raw_imgs = []
@@ -283,14 +284,19 @@ def generate_features(visual_baked, model, preprocess, backbone_type="ResNet34",
   target_actions = []
   stack_robot_qpos = []
   
-  for i in range(len(visual_baked["action"])):
-    act = visual_baked["action"][i]
-    obs = visual_baked["obs"][i]
-    qpos = visual_baked["robot_qpos"][i]
-    raw_imgs.append(obs["relocate_view-rgb"])
-    robot_states.append(obs["state"])
-    target_actions.append(act)
-    stack_robot_qpos.append(qpos)
+  raw_imgs = [x["relocate_view-rgb"] for x in visual_baked["obs"]]
+  robot_states = [x["state"] for x in visual_baked["obs"]]
+  target_actions = visual_baked["action"]
+  stack_robot_qpos = visual_baked["robot_qpos"]
+
+  # for i in range(len(visual_baked["action"])):
+  #   act = visual_baked["action"][i]
+  #   obs = visual_baked["obs"][i]
+  #   qpos = visual_baked["robot_qpos"][i]
+  #   raw_imgs.append(obs["relocate_view-rgb"])
+  #   robot_states.append(obs["state"])
+  #   target_actions.append(act)
+  #   stack_robot_qpos.append(qpos)
 
   if encode:
     image_encoder = train_image_encoder(features=features)
@@ -309,20 +315,32 @@ def generate_features(visual_baked, model, preprocess, backbone_type="ResNet34",
   aug_concat_robot_qpos = []
   aug_concat_obs = []
   aug_concat_action = []
-  for i in tqdm(range(num_data_aug)):
-
+  for i in range(num_data_aug):
     features = []
-    
-    for img in tqdm(raw_imgs):
-      # img = torch.from_numpy(np.moveaxis(img,-1,0)[None, ...])
-      img = img.permute((2,0,1))[None, ...]
+    beg = 0
+    batch_size = 128
+    n_batches = int(np.ceil(len(raw_imgs) / batch_size))
+
+    for _ in range(n_batches):
+      end = min(beg + batch_size, len(raw_imgs))
+      img_batch = torch.stack(raw_imgs[beg:end]).permute((0, 3, 1, 2))
       if i != 0:
-        img = augmentation_img(img,augmenter)
-      img = preprocess(img)
-      img = img.to(device)
-      with torch.no_grad():
-          feature = model(img)
-      features.append(feature.cpu().detach().numpy().reshape(-1))
+        img_batch = augmentation_img(img_batch, augmenter)
+      img_batch = preprocess(img_batch).to(device)
+      feat_batch = model(img_batch)
+      features += [x for x in feat_batch.cpu().numpy().squeeze()]
+      beg = end
+    
+    # for img in tqdm(raw_imgs):
+    #   # img = torch.from_numpy(np.moveaxis(img,-1,0)[None, ...])
+    #   img = img.permute((2,0,1))[None, ...]
+    #   if i != 0:
+    #     img = augmentation_img(img,augmenter)
+    #   img = preprocess(img)
+    #   img = img.to(device)
+    #   with torch.no_grad():
+    #       feature = model(img)
+    #   features.append(feature.cpu().detach().numpy().reshape(-1))
 
     concatenated_obs, concatenated_robot_qpos = concate_features(features,stack_robot_qpos)
     aug_concat_robot_qpos.extend(concatenated_robot_qpos)

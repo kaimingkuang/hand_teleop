@@ -3,7 +3,7 @@ import torch.nn as nn
 from torchvision import models, transforms
 import torchvision.transforms as T
 from torchvision.models.feature_extraction import create_feature_extractor
-from feature_extractor import FeatureExtractor, ClassToken
+from main.feature_extractor import FeatureExtractor, ClassToken
 
 from termcolor import colored
 import numpy as np

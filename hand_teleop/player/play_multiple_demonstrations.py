@@ -45,7 +45,7 @@ def play_multiple_sim_visual(args):
     visual_training_set = dict(obs=[], next_obs=[], state=[], next_state=[], action=[], robot_qpos=[], sim_real_label=[])
     init_obj_poses = []
 
-    for demo_id, file_name in enumerate(demo_files):
+    for demo_id, file_name in enumerate(tqdm(demo_files)):
         print(file_name)
         with open(file_name, 'rb') as file:
             demo = pickle.load(file)
@@ -513,7 +513,7 @@ def play_one_real_sim_visual_demo(demo, robot_name, domain_randomization, random
                     env.step(target_qpos)
     else:
 
-        for idx, (obs, qpos, state, action, ee_pose) in enumerate(zip(baked_data["obs"], baked_data["robot_qpos"], baked_data["state"],
+        for idx, (obs, qpos, action, ee_pose) in enumerate(zip(baked_data["obs"], baked_data["robot_qpos"],
                                         baked_data["action"], baked_data["ee_pose"])):
             # NOTE: robot.get_qpos() version
             if idx != len(baked_data['obs'])-1:
@@ -664,12 +664,12 @@ if __name__ == '__main__':
     args = {
         #'demo_folder' : './sim/raw_data/xarm/less_random/pick_place_mustard_bottle_0.73',
         #'sim_demo_folder': None,
-        'sim_demo_folder' : './sim/raw_data/xarm/less_random/pick_place_mustard_bottle',
+        'sim_demo_folder' : args.sim_folder,
         #'sim_demo_folder' : './sim/raw_data/xarm/less_random/pick_place_tomato_soup_can',
         #'sim_demo_folder' : './sim/raw_data/xarm/less_random/pick_place_sugar_box',
 
         #'real_demo_folder': None,
-        'real_demo_folder' : './real/raw_data/pick_place_mustard_bottle',
+        'real_demo_folder' : args.real_folder,
         #'real_demo_folder' : './real/raw_data/pick_place_tomato_soup_can',
         #'real_demo_folder' : './real/raw_data/pick_place_sugar_box',
     

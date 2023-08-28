@@ -31,7 +31,7 @@ class DClawRLEnv(DClawEnv, BaseRLEnv):
         self.object_pose_noise = object_pose_noise
 
         self.object_angle = self.get_object_rotate_angle()
-        self.object_total_rotate_angle = 0
+        # self.object_total_rotate_angle = 0
 
         # Parse link name
         if self.is_robot_free:
@@ -127,7 +127,7 @@ class DClawRLEnv(DClawEnv, BaseRLEnv):
         # random_pos = self.np_random.randn(3) * self.object_pose_noise
         # self.object_episode_init_pose = self.object_episode_init_pose * sapien.Pose(random_pos, random_quat)
         self.object_angle = self.get_object_rotate_angle()
-        self.object_total_rotate_angle = 0
+        # self.object_total_rotate_angle = 0
 
         return self.get_observation()
 
@@ -155,17 +155,32 @@ class DClawRLEnv(DClawEnv, BaseRLEnv):
 
         return z_angle
 
-    def _is_object_rotated(self):
-        # check the x-y position of the object against the target
-        delta_angle = self.get_object_rotate_angle() - self.object_angle
-        self.object_angle = self.get_object_rotate_angle()
-        self.object_total_rotate_angle += np.fabs(delta_angle)
+    # def _is_object_rotated(self):
+    #     # check the x-y position of the object against the target
+    #     delta_angle = self.get_object_rotate_angle() - self.object_angle
+    #     self.object_angle = self.get_object_rotate_angle()
+    #     self.object_total_rotate_angle += np.fabs(delta_angle)
 
-        return delta_angle != 0
+    #     return delta_angle != 0
+
+    @property
+    def object_total_rotate_angle(self):
+        if self.object_angle < 0 and self.object_angle >= -135:
+            return 0
+        elif self.object_angle >= 0:
+            return self.object_angle
+        else:
+            return self.object_angle + 360
+
+    def _is_successful(self):
+        return self.object_angle >= -180 and self.object_angle <= -135
 
     def get_info(self):
-        return {"is_object_rotated": self._is_object_rotated(),
-                "object_total_rotate_angle": self.object_total_rotate_angle}
+        return {
+            # "is_object_rotated": self._is_object_rotated(),
+            "object_total_rotate_angle": self.object_total_rotate_angle,
+            "success": self._is_successful()
+        }
 
 
 def main_env():

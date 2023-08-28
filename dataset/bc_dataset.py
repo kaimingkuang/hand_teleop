@@ -1,3 +1,5 @@
+import gc
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -61,16 +63,16 @@ class BCDataset(Dataset):
                 self.dummy_data = pickle.load(dummy_file)
         elif data != None:
             self.keys = data.keys()
-            self.obs = torch.from_numpy(np.array(data['obs']))
-            self.next_obs = torch.from_numpy(np.array(data['next_obs']))
-            self.robot_qpos = torch.from_numpy(np.array(data['robot_qpos']))
+            self.obs = torch.from_numpy(data['obs'])
+            # self.next_obs = torch.from_numpy(np.array(data['next_obs']))
+            self.robot_qpos = torch.from_numpy(data['robot_qpos'])
             self.state = None
             self.next_state = None
             if 'state' in data.keys():
-                self.state = torch.from_numpy(np.array(data['state']))
-                self.next_state = torch.from_numpy(np.array(data['next_state']))
-            self.action = torch.from_numpy(np.array(data['action']))
-            self.label = torch.from_numpy(np.array(data['sim_real_label']))
+                self.state = torch.from_numpy(data['state'])
+                self.next_state = torch.from_numpy(data['next_state'])
+            self.action = torch.from_numpy(data['action'])
+            self.label = torch.from_numpy(data['sim_real_label'])
             self.dummy_data = {}
             for key in data.keys():
                 self.dummy_data[key] = data[key][0]                
@@ -88,17 +90,18 @@ class BCDataset(Dataset):
             with open(self.paths[idx],'rb') as file:
                 data = pickle.load(file)
             obs = torch.from_numpy(np.array(data['obs']))
-            next_obs = torch.from_numpy(np.array(data['next_obs']))
+            # next_obs = torch.from_numpy(np.array(data['next_obs']))
             action = torch.from_numpy(np.array(data['action']))
             robot_qpos = torch.from_numpy(np.array(data['robot_qpos']))
             label = torch.from_numpy(np.array(data['sim_real_label']))
             if 'state' in data.keys():
                 state = torch.from_numpy(np.array(data['state']))
                 next_state = torch.from_numpy(np.array(data['next_state']))
-                return obs, next_obs, state, next_state, action, label
+                # return obs, next_obs, state, next_state, action, label
+                return obs, state, next_state, action, label
         else:
             obs = self.obs[idx]
-            next_obs = self.next_obs[idx]
+            # next_obs = self.next_obs[idx]
             state = None
             next_state = None
             action = self.action[idx]
@@ -107,8 +110,10 @@ class BCDataset(Dataset):
             if 'state' in self.keys:
                 state = self.state[idx]
                 next_state = self.next_state[idx]
-                return obs, next_obs, state, next_state, action, label
-        return obs, next_obs, robot_qpos, action, label
+                # return obs, next_obs, state, next_state, action, label
+                return obs, state, next_state, action, label
+        # return obs, next_obs, robot_qpos, action, label
+        return obs, robot_qpos, action, label
 
 def prepare_real_sim_data(dataset_folder, backbone_type, real_batch_size, sim_batch_size, val_ratio = 0.1, seed = 0, using_real_sim = False):
     print('=== Loading trajectories ===')
@@ -153,25 +158,40 @@ def prepare_data(data, batch_size , val_ratio = 0.1, seed = 0,
     
     np.random.seed(seed)
     random_order = np.random.permutation(len(data["action"]))
+    # random_order = random_order[:50000]
 
-    obs = np.array(data['obs'])
-    obs = obs[random_order]
-    next_obs = np.array(data['next_obs'])
-    next_obs = next_obs[random_order]
-    robot_qpos = np.array(data['robot_qpos'])
-    robot_qpos = robot_qpos[random_order]
-    targets = np.array(data["action"])
-    targets = targets[random_order]
+    obs = np.stack([data["obs"][i] for i in random_order])
+    del data["obs"]
+    gc.collect()
+    # next_obs = np.stack([data["next_obs"][i] for i in random_order])
+    del data["next_obs"]
+    # gc.collect()
+    robot_qpos = np.stack([data["robot_qpos"][i] for i in random_order])
+    del data["robot_qpos"]
+    gc.collect()
+    targets = np.stack([data["action"][i] for i in random_order])
+    del data["action"]
+    gc.collect()
+    # obs = np.stack([data['obs']])
+    # obs = obs[random_order]
+    # next_obs = np.stack(data['next_obs'])
+    # next_obs = next_obs[random_order]
+    # robot_qpos = np.stack(data['robot_qpos'])
+    # robot_qpos = robot_qpos[random_order]
+    # targets = np.stack(data["action"])
+    # targets = targets[random_order]
     if data_type == "sim":
         labels = np.zeros(obs.shape[0])
     elif data_type == "real":
         labels = np.ones(obs.shape[0])
     else:
-        labels = np.array(data["sim_real_label"])
-    labels = labels[random_order]
+        labels = np.stack(data["sim_real_label"])
+        labels = labels[random_order]
     cutoff = int(len(obs) * val_ratio)
-    train_data = dict(obs=obs[cutoff:], next_obs=next_obs[cutoff:], action=targets[cutoff:], robot_qpos=robot_qpos[cutoff:], sim_real_label=labels[cutoff:])
-    validation_data = dict(obs=obs[:cutoff], next_obs=next_obs[:cutoff], action=targets[:cutoff], robot_qpos=robot_qpos[:cutoff], sim_real_label=labels[:cutoff])
+    # train_data = dict(obs=obs[cutoff:], next_obs=next_obs[cutoff:], action=targets[cutoff:], robot_qpos=robot_qpos[cutoff:], sim_real_label=labels[cutoff:])
+    # validation_data = dict(obs=obs[:cutoff], next_obs=next_obs[:cutoff], action=targets[:cutoff], robot_qpos=robot_qpos[:cutoff], sim_real_label=labels[:cutoff])
+    train_data = dict(obs=obs[cutoff:], action=targets[cutoff:], robot_qpos=robot_qpos[cutoff:], sim_real_label=labels[cutoff:])
+    validation_data = dict(obs=obs[:cutoff], action=targets[:cutoff], robot_qpos=robot_qpos[:cutoff], sim_real_label=labels[:cutoff])
 
     bc_train_set = BCDataset(data_paths=None, data=train_data)
     bc_validation_set = BCDataset(data_paths=None, data=validation_data)
@@ -189,7 +209,8 @@ def get_stacked_data_from_obs(rgb_imgs, stacked_robot_qpos, robot_qpos, robot_st
         assert preprocess != None
         robot_state = obs["state"]
         img = obs["relocate_view-rgb"]
-        img = torch.from_numpy(np.moveaxis(img,-1,0)[None, ...])
+        # img = torch.from_numpy(np.moveaxis(img,-1,0)[None, ...])
+        img = img.permute((2, 0, 1))[None, ...]
         img = preprocess(img)
         img = img.to(device)
         with torch.no_grad():

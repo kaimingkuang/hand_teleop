@@ -7,7 +7,7 @@ from tqdm import tqdm
 import dataset.bc_dataset as bc_dataset
 
 from main.policy.bc_agent import make_agent
-from feature_extractor import generate_feature_extraction_model
+from main.feature_extractor import generate_feature_extraction_model
 from sapien.utils import Viewer
 
 from hand_teleop.env.rl_env.base import BaseRLEnv

@@ -44,7 +44,7 @@ def evaluate(agent, validation_loader, L, epoch):
             valid_states = data_batch[2].to(device)
             loss = agent.validate(obs=valid_obs, state=valid_states, action=valid_actions, L=L, step=epoch, mode='eval') 
         else:
-            valid_robot_qpos = data_batch[2].to(device)
+            valid_robot_qpos = data_batch[1].to(device)
             valid_states = None
             loss = agent.validate(concatenated_obs=valid_obs, action=valid_actions, robot_qpos=valid_robot_qpos, L=L, step=epoch, sim_real_label=sim_real_label, mode='eval')
         loss_val += loss
@@ -60,7 +60,7 @@ def eval_in_env(args, agent, log_dir, epoch, x_steps, y_steps):
     # --Create Env and Robot-- #
     robot_name = args["robot_name"]
     # task_name = meta_data['task_name']
-    task_name = "pick_place"
+    task_name = args["task"]
     if 'randomness_scale' in meta_data["env_kwargs"].keys():
         randomness_scale = meta_data["env_kwargs"]['randomness_scale']
     else:
@@ -178,6 +178,7 @@ def eval_in_env(args, agent, log_dir, epoch, x_steps, y_steps):
 
     eval_idx = 0
     avg_success = 0
+    avg_angle = 0
     progress = tqdm(total=x_steps * y_steps)
 
     # since in simulation, we always use simulated data, so sim_real_label is always 0
@@ -226,8 +227,9 @@ def eval_in_env(args, agent, log_dir, epoch, x_steps, y_steps):
             else:
                 oracle_obs = []
             success = False
+            max_angle = 0
             for i in range(1700):
-                video.append(obs["relocate_view-rgb"])
+                video.append(obs["relocate_view-rgb"].cpu().numpy())
                 if concatenated_obs_shape != None:
                     assert args['adapt'] == False
                     if args['use_visual_obs']:
@@ -267,11 +269,15 @@ def eval_in_env(args, agent, log_dir, epoch, x_steps, y_steps):
                 # next_obs, reward, done, _ = env.step(action)
                 # NOTE For new version, uncomment below!
                 next_obs, reward, done, info = env.step(real_action)
-                if epoch != "best":
-                    info_success = info["is_object_lifted"] and info["success"]
-                else:
+                if task_name == "pick_place":
+                    if epoch != "best":
+                        info_success = info["is_object_lifted"] and info["success"]
+                    else:
+                        info_success = info["success"]
+                elif task_name == "dclaw":
                     info_success = info["success"]
-                
+                    max_angle = max(max_angle, info["object_total_rotate_angle"])
+
                 success = success or info_success
                 if success:
                     break
@@ -285,27 +291,34 @@ def eval_in_env(args, agent, log_dir, epoch, x_steps, y_steps):
                 # env.render()
 
                 obs = deepcopy(next_obs)
-            
-            #If it did not lift the object, consider it as 0.25 success
-            if epoch != "best" and info["success"]:
-                avg_success += 0.25
+
             avg_success += int(success)
             video = (np.stack(video) * 255).astype(np.uint8)
+            #If it did not lift the object, consider it as 0.25 success
+            if task_name == "pick_place":
+                if epoch != "best" and info["success"]:
+                    avg_success += 0.25
 
-            #only save video if success or in the final_success evaluation
-            #if success or epoch == "best":
-            is_lifted = info["is_object_lifted"]
-            video_path = os.path.join(log_dir, f"epoch_{epoch}_{eval_idx}_{success}_{is_lifted}.mp4")
-            #imageio version 2.28.1 imageio-ffmpeg version 0.4.8 scikit-image version 0.20.0
+                is_lifted = info["is_object_lifted"]
+                video_path = os.path.join(log_dir, f"epoch_{epoch}_{eval_idx}_{success}_{is_lifted}.mp4")
+                #imageio version 2.28.1 imageio-ffmpeg version 0.4.8 scikit-image version 0.20.0
+            elif task_name == "dclaw":
+                video_path = os.path.join(log_dir, f"epoch_{epoch}_{eval_idx}_{success}_{max_angle}.mp4")
+                avg_angle += max_angle
             imageio.mimsave(video_path, video, fps=120)
             eval_idx += 1
             progress.update()
 
     avg_success /= eval_idx
+    if task_name == "dclaw":
+        avg_angle /= eval_idx
     progress.close()
     
     print("avg_success in epoch", epoch, ":", avg_success)
-    return avg_success
+    if task_name == "pick_place":
+        return avg_success
+    elif task_name == "dclaw":
+        return avg_success, avg_angle
 
 
 def main(args):
@@ -360,8 +373,8 @@ def main(args):
     if not args["eval_only"]:
         cur_time = datetime.now().strftime("%Y%m%d-%H%M%S")
         log_dir = os.path.join("logs", f"{args['task']}_{args['backbone_type']}_{cur_time}")
-        #wandb_cfg = OmegaConf.load("wandb_cfg.yaml")
-        #wandb.login(key=wandb_cfg.key)
+        wandb_cfg = OmegaConf.load("wandb_cfg.yaml")
+        wandb.login(key=wandb_cfg.key)
         wandb.init(
             project="hand-teleop",
             name=os.path.basename(log_dir),
@@ -369,6 +382,7 @@ def main(args):
         )
         os.makedirs(log_dir, exist_ok=True)
         best_success = 0
+        best_angle = 0
         for epoch in range(args['num_epochs']):
             print('  ','Epoch: ', epoch)
             loss_train = 0
@@ -377,7 +391,8 @@ def main(args):
                 time_train_iter = time.time()
                 data_batch = next(iter(bc_train_dataloader))
                 obs_batch = data_batch[0].to(device)
-                next_obs_batch = data_batch[1].to(device)
+                # next_obs_batch = data_batch[1].to(device)
+                next_obs_batch = None
                 action_batch = data_batch[-2].to(device)
                 sim_real_label = data_batch[-1].to(device)
         
@@ -387,7 +402,7 @@ def main(args):
                 else:
                     state_batch = None
                     next_state_batch = None
-                    robot_qpos_batch = data_batch[2].to(device)
+                    robot_qpos_batch = data_batch[1].to(device)
 
                 if args['use_augmentation'] and len(obs_batch.shape)==4:
                     obs_batch = aug(obs_batch)
@@ -411,11 +426,19 @@ def main(args):
 
             if (epoch + 1) % args["eval_freq"] == 0 and (epoch+1) >= args["eval_start_epoch"]:
                 #total_steps = x_steps * y_steps = 4 * 5 = 20
-                avg_success = eval_in_env(args, agent, log_dir, epoch + 1, 4, 5)
-                metrics["avg_success"] = avg_success
+                if args["task"] == "pick_place":
+                    avg_success = eval_in_env(args, agent, log_dir, epoch + 1, 4, 5)
+                    metrics["avg_success"] = avg_success
+                    if avg_success > best_success:
+                        agent.save(os.path.join(log_dir, f"epoch_best.pt"), args)
+                elif args["task"] == "dclaw":
+                    avg_success, avg_angle = eval_in_env(args, agent, log_dir, epoch + 1, 1, 1)
+                    metrics["avg_success"] = avg_success
+                    metrics["avg_angle"] = avg_angle
+                    if avg_angle > best_angle:
+                        agent.save(os.path.join(log_dir, f"epoch_best.pt"), args)
+                
                 agent.save(os.path.join(log_dir, f"epoch_{epoch + 1}.pt"), args)
-                if avg_success > best_success:
-                    agent.save(os.path.join(log_dir, f"epoch_best.pt"), args)
 
             agent.train(train_visual_encoder=args['train_visual_encoder'],
                         train_state_encoder=args['train_state_encoder'], 
@@ -426,10 +449,15 @@ def main(args):
 
         agent.load(os.path.join(log_dir, "epoch_best.pt"))
         agent.train(train_visual_encoder=False, train_state_encoder=False, train_policy=False, train_inv=False)
-        final_success = eval_in_env(args, agent, log_dir, "best", 10, 10)
-
-        wandb.log({"final_success": final_success})
-        print(f"Final success rate: {final_success:.4f}")
+        if args["task"] == "pick_place":
+            final_success = eval_in_env(args, agent, log_dir, "best", 10, 10)
+            wandb.log({"final_success": final_success})
+            print(f"Final success rate: {final_success:.4f}")
+        elif args["task"] == "dclaw":
+            final_success, final_angle = eval_in_env(args, agent, log_dir, "best", 10, 10)
+            wandb.log({"final_success": final_success, "final_angle": final_angle})
+            print(f"Final success rate: {final_success:.4f}")
+            print(f"Final angle: {final_angle:.4f}")
 
         wandb.finish()
     else:
@@ -442,9 +470,15 @@ def main(args):
         os.makedirs(log_dir, exist_ok=True)
         agent.load(args["ckpt"])
         agent.train(train_visual_encoder=False, train_state_encoder=False, train_policy=False, train_inv=False)
-        final_success = eval_in_env(args, agent, log_dir, "best", 10, 10)
-        wandb.log({"final_success": final_success})
-        print(f"Final success rate: {final_success:.4f}")
+        if args["task"] == "pick_place":
+            final_success = eval_in_env(args, agent, log_dir, "best", 10, 10)
+            wandb.log({"final_success": final_success})
+            print(f"Final success rate: {final_success:.4f}")
+        elif args["task"] == "dclaw":
+            final_success, final_angle = eval_in_env(args, agent, log_dir, "best", 10, 10)
+            wandb.log({"final_success": final_success, "final_angle": final_angle})
+            print(f"Final success rate: {final_success:.4f}")
+            print(f"Final angle: {final_angle:.4f}")
 
         wandb.finish()
 
@@ -452,11 +486,14 @@ def main(args):
 def parse_args():
     parser = ArgumentParser()
     parser.add_argument("--demo-folder", required=True)
-    parser.add_argument("--backbone-type", default="resnet50")
+    parser.add_argument("--backbone-type", default="regnet_y_3_2gf")
     parser.add_argument("--eval-freq", default=200, type=int)
     parser.add_argument("--eval-start-epoch", default=400, type=int)
     parser.add_argument("--eval-only", action="store_true")
     parser.add_argument("--ckpt", default=None, type=str)
+    parser.add_argument("--batch-size", default=65536, type=int)
+    parser.add_argument("--lr", default=2e-5, type=float)
+    parser.add_argument("--wd-coef", default=1e-2, type=float)
     args = parser.parse_args()
 
     return args
@@ -469,9 +506,9 @@ if __name__ == '__main__':
         'dataset_folder': args.demo_folder,
         'batch_size': 65536,
         'val_ratio': 0.1,
-        'bc_lr': 2e-5,
+        'bc_lr': args.lr,
         'num_epochs': 1600,
-        'weight_decay': 1e-2,
+        'weight_decay': args.wd_coef,
         'model_name': '',
         'resume': False,
         'load_model_from': None,
@@ -501,7 +538,7 @@ if __name__ == '__main__':
         'ss_state_encoder_lr': 3e-4,
         'ss_inv_lr': 3e-4,
         'bc_beta': 0.99,
-        "task": "pick_place_sugar_box",
+        "task": os.path.basename(args.demo_folder),
         'robot_name': 'xarm6_allegro_modified_finger',
         'use_visual_obs': True,
         'adapt': False,

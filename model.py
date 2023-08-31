@@ -1,4 +1,5 @@
 import torch
+import torch.nn.functional as F
 from torch.autograd import Function
 import torch.nn as nn
 from torchvision import models
@@ -24,6 +25,7 @@ class MLPLayer(nn.Sequential):
     def __init__(self, in_channels, out_channels):
         super().__init__(
             nn.Linear(in_channels, out_channels),
+            nn.BatchNorm1d(out_channels),
             nn.ReLU()
         )
 
@@ -43,46 +45,60 @@ class MLP(nn.Sequential):
 
 class PolicyNet(nn.Module):
 
-    def __init__(self, in_channels, hidden_channels, out_channels):
+    def __init__(
+            self,
+            vis_dims,
+            qpos_dims,
+            hidden_channels,
+            out_channels,
+            n_vis_layers,
+            n_policy_layers,
+            drop_prob,
+        ):
         super().__init__()
-        self.backbone = MLP(in_channels, hidden_channels)
-        self.out_layer = nn.Linear(hidden_channels[-1], out_channels)
-    
-    def forward(self, inputs, ret_feats=False):
-        feats = self.backbone(inputs)
-        outputs = self.out_layer(feats)
 
-        if ret_feats:
-            return outputs, feats
+        self.vis_lins = nn.ModuleList(
+            [nn.Linear(vis_dims, hidden_channels)]\
+            + [nn.Linear(hidden_channels, hidden_channels) for _ in range(n_vis_layers - 1)]
+        )
+        self.vis_sim_norms = nn.ModuleList([nn.BatchNorm1d(hidden_channels)
+            for _ in range(n_vis_layers)])
+        self.vis_real_norms = nn.ModuleList([nn.BatchNorm1d(hidden_channels)
+            for _ in range(n_vis_layers)])
+
+        self.policy_lins = nn.ModuleList(
+            [nn.Linear(hidden_channels + qpos_dims, hidden_channels)]\
+            + [nn.Linear(hidden_channels, hidden_channels) for _ in range(n_policy_layers - 1)],
+        )
+        self.policy_sim_norms = nn.ModuleList([nn.BatchNorm1d(hidden_channels)
+            for _ in range(n_policy_layers)])
+        self.policy_real_norms = nn.ModuleList([nn.BatchNorm1d(hidden_channels)
+            for _ in range(n_policy_layers)])
+
+        self.out_layer = nn.Linear(hidden_channels, out_channels)
+        self.drop_prob = drop_prob
+
+    def forward(self, vis_feats, qpos, mode):
+        if mode == "sim":
+            for i in range(len(self.vis_lins)):
+                vis_feats = F.relu(self.vis_sim_norms[i](self.vis_lins[i](vis_feats)))
         else:
-            return outputs
+            for i in range(len(self.vis_lins)):
+                vis_feats = F.relu(self.vis_real_norms[i](self.vis_lins[i](vis_feats)))
 
+        vis_feats = F.dropout(vis_feats, self.drop_prob, self.training)
+        feats = torch.cat([vis_feats, qpos], dim=-1)
 
-class GradientReversalFunc(Function):
-    @staticmethod
-    def forward(ctx, x, alpha):
-        ctx.save_for_backward(x, alpha)
-        return x
+        if mode == "sim":
+            for i in range(len(self.policy_lins)):
+                feats = F.relu(self.policy_sim_norms[i](self.policy_lins[i](feats)))
+        else:
+            for i in range(len(self.policy_lins)):
+                feats = F.relu(self.policy_real_norms[i](self.policy_lins[i](feats)))
 
-    @staticmethod
-    def backward(ctx, grad_output):
-        grad_input = None
-        _, alpha = ctx.saved_tensors
-        if ctx.needs_input_grad[0]:
-            grad_input = - alpha*grad_output
-        return grad_input, None
+        outputs = self.out_layer(F.dropout(feats, self.drop_prob, self.training))
 
-
-revgrad = GradientReversalFunc.apply
-
-
-class GradientReversal(nn.Module):
-    def __init__(self, alpha=1):
-        super().__init__()
-        self.alpha = torch.tensor(alpha, requires_grad=False)
-
-    def forward(self, x):
-        return revgrad(x, self.alpha)
+        return outputs
 
 
 class Agent(nn.Module):
@@ -94,13 +110,6 @@ class Agent(nn.Module):
         self.vision_net = self.init_vision_net()
 
         self.policy_net = self.init_policy_net()
-
-        if args.grad_rev:
-            feat_channels = args.hidden_channels[-1]
-            self.domain_clf = nn.Sequential(
-                GradientReversal(),
-                MLP(feat_channels, [feat_channels // 2], 1),
-            )
 
     def init_vision_net(self):
         model_fn = eval(f"models.{self.args.backbone}")
@@ -114,42 +123,46 @@ class Agent(nn.Module):
 
     def init_policy_net(self):
         model = PolicyNet(
-            self.args.in_channels,
+            self.args.vis_dims,
+            self.args.qpos_dims,
             self.args.hidden_channels,
-            self.args.out_channels
+            self.args.out_channels,
+            self.args.n_vis_layers,
+            self.args.n_policy_layers,
+            self.args.drop_prob,
         )
 
         return model
 
-    def forward(self, robot_qpos, vision_inputs=None, use_vision_net=False):
-        if use_vision_net:
-            n_steps = vision_inputs.size(1)
-            vision_feats = []
-            for i in range(n_steps):
-                vision_feats.append(self.vision_net(vision_inputs[:, i]))
-            vision_feats = torch.cat(vision_feats, dim=0)
-            inputs = torch.cat([vision_feats, robot_qpos], dim=-1)
-            inputs = inputs.reshape((1, -1))
-        else:
-            inputs = torch.cat([vision_inputs, robot_qpos], dim=-1)
+    def forward(self, images, robot_qpos, mode):
+        vis_feats = self.get_image_feats(images)
+        vis_feats = vis_feats.unfold(0, self.args.window_size, 1)\
+            .permute((0, 2, 1))
 
-        if self.args.grad_rev:
-            outputs, feats = self.policy_net(inputs, ret_feats=True)
-            domain_outputs = self.domain_clf(feats).squeeze(dim=-1)
-            return outputs, domain_outputs
-        else:
-            outputs = self.policy_net(inputs)
-            return outputs
+        b = vis_feats.size(0)
+        vis_feats = vis_feats.reshape((b, -1))
+        robot_qpos = robot_qpos.unfold(0, self.args.window_size, 1)\
+            .permute((0, 2, 1)).reshape((b, -1))
+
+        outputs = self.policy_net(vis_feats, robot_qpos, mode)
+
+        return outputs
 
     @torch.no_grad()
-    def get_action(self, robot_qpos, vision_inputs):
-        if self.args.grad_rev:
-            action, _ = self(robot_qpos, vision_inputs, use_vision_net=True)
-        else:
-            action = self(robot_qpos, vision_inputs, use_vision_net=True)
+    def get_action(self, images, qpos, mode):
+        action = self(images, qpos, mode)
         action = action.cpu().numpy()
 
         return action
+
+    def get_image_feats(self, images):
+        if self.vision_net.training:
+            feats = self.vision_net(images)
+        else:
+            with torch.no_grad():
+                feats = self.vision_net(images)
+
+        return feats
 
 
 if __name__ == "__main__":

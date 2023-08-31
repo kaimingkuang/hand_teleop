@@ -432,7 +432,7 @@ def main(args):
                     if avg_success > best_success:
                         agent.save(os.path.join(log_dir, f"epoch_best.pt"), args)
                 elif args["task"] == "dclaw":
-                    avg_success, avg_angle = eval_in_env(args, agent, log_dir, epoch + 1, 1, 1)
+                    avg_success, avg_angle = eval_in_env(args, agent, log_dir, epoch + 1, 4, 5)
                     metrics["avg_success"] = avg_success
                     metrics["avg_angle"] = avg_angle
                     if avg_angle > best_angle:

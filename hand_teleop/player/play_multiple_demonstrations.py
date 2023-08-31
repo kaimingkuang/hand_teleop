@@ -44,6 +44,7 @@ def play_multiple_sim_visual(args):
     print('---------------------')
     visual_training_set = dict(obs=[], next_obs=[], state=[], next_state=[], action=[], robot_qpos=[], sim_real_label=[])
     init_obj_poses = []
+    demo_files = sorted(demo_files)
 
     for demo_id, file_name in enumerate(tqdm(demo_files)):
         print(file_name)
@@ -647,7 +648,7 @@ def stack_and_save_frames(visual_baked, visual_training_set, demo_id, dataset_fo
 def parse_args():
     parser = ArgumentParser()
     parser.add_argument("--backbone-type", required=True)
-    parser.add_argument("--delta-ee-pose-bound", default="0.0005", type=float)
+    parser.add_argument("--delta-ee-pose-bound", default=0.0005, type=float)
     parser.add_argument("--sim-folder", default=None)
     parser.add_argument("--real-folder", default=None)
     parser.add_argument("--out-folder", required=True)

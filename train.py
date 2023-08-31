@@ -22,18 +22,20 @@ def parse_args():
 
     # model
     parser.add_argument("--backbone", default="regnet_y_3_2gf")
-    parser.add_argument("--in-channels", default=6164, type=int)
+    parser.add_argument("--vis-dims", default=6048, type=int)
+    parser.add_argument("--qpos-dims", default=116, type=int)
     parser.add_argument("--hidden-channels", default=1024, type=int)
-    parser.add_argument("--n-hidden-layers", default=3, type=int)
+    parser.add_argument("--n-vis-layers", default=2, type=int)
+    parser.add_argument("--n-policy-layers", default=3, type=int)
+    parser.add_argument("--drop-prob", default=0.2, type=float)
     parser.add_argument("--out-channels", default=22, type=int)
     parser.add_argument("--finetune-backbone", action="store_true")
     parser.add_argument("--window-size", default=4, type=int)
-    parser.add_argument("--grad-rev", action="store_true")
 
     # training
     parser.add_argument("--lr", default=1e-5, type=float)
     parser.add_argument("--wd-coef", default=0.01, type=float)
-    parser.add_argument("--batch-size", default=20000, type=int)
+    parser.add_argument("--batch-size", default=128, type=int)
     parser.add_argument("--epochs", default=2000, type=int)
     parser.add_argument("--grad-acc", default=1, type=int)
     parser.add_argument("--aug-prob", default=0.5, type=float)
@@ -58,15 +60,17 @@ def parse_args():
 
     args = parser.parse_args()
 
-    args.task = os.path.basename(args.demo_folder)
+    if os.path.basename(args.demo_folder).startswith("pick_place"):
+        args.task = "pick_place"
+    elif os.path.basename(args.demo_folder).startswith("dclaw"):
+        args.task = "dclaw"
+
     if args.debug:
         args.n_workers = 0
         args.eval_freq = 1
         args.eval_x_steps = 1
         args.eval_y_steps = 1
         args.eval_beg = 0
-
-    args.hidden_channels = [args.hidden_channels] * args.n_hidden_layers
 
     return args
 
@@ -84,6 +88,23 @@ def main():
 
     set_rng_seed(args.seed)
     trainer = Trainer(args)
+
+    player = trainer.init_player(trainer.demos_train[0])
+
+    # video = []
+    # from tqdm import tqdm
+    # for i in tqdm(range(len(trainer.demos_train[0]["data"]))):
+    #     image = trainer.render_single_frame(player, i)
+    #     video.append(image.cpu().numpy())
+
+    # video = (np.stack(video) * 255).astype(np.uint8)
+    # import imageio
+    # imageio.mimsave("raw.mp4", video, fps=120)
+
+    # player = trainer.init_player(trainer.demos_train[20])
+    # actions = trainer.replay_demo(player)
+    # player = trainer.init_player(trainer.demos_train[20])
+    # trainer.validate_actions(player, actions, "test.mp4")
 
     if args.ckpt is not None:
         trainer.load_checkpoint(args.ckpt)

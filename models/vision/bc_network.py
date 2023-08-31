@@ -111,7 +111,7 @@ class BCNetwork(nn.Module):
         #     x = self.drop2(torch.relu(self.l2(x)))
         #     x = self.drop3(torch.relu(self.l3(x)))
         #     action = self.l4(x)
-       
+
         if all(sim_real_label) and any(sim_real_label):
             #x = self.drop0(torch.relu(self.real_bn0(self.l0(concatenated_obs))))
             #x = self.drop1(torch.relu(self.real_bn1(self.l1(x))))
